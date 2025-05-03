@@ -2,6 +2,8 @@ import pytest
 import pandas as pd
 import numpy as np
 from utils.transform import transform_data
+import logging
+from unittest import mock
 
 @pytest.fixture
 def sample_raw_data():
@@ -62,3 +64,70 @@ def test_timestamp_conversion(sample_raw_data):
     df = transform_data(sample_raw_data)
     assert pd.api.types.is_datetime64_any_dtype(df['timestamp'])
     assert df['timestamp'].dt.tz is None
+
+def test_transform_color_as_int():
+    raw = [{
+        'title': 'Product C', 'price_usd': 12.0, 'rating': 4.0,
+        'colors': 3, 'sizes': ['S'], 'gender': 'men',
+        'timestamp': '2025-05-03T00:00:00'
+    }]
+    df = transform_data(raw)
+    assert df.iloc[0]['colors'] == 3
+
+def test_transform_color_as_str_valid():
+    raw = [{
+        'title': 'Product D', 'price_usd': 15.0, 'rating': 4.0,
+        'colors': '2 colors', 'sizes': ['S'], 'gender': 'men',
+        'timestamp': '2025-05-03T00:00:00'
+    }]
+    df = transform_data(raw)
+    assert df.iloc[0]['colors'] == 2
+
+def test_transform_color_as_str_invalid():
+    raw = [{
+        'title': 'Invalid Color Product', 'price_usd': 15.0, 'rating': 4.0,
+        'colors': 'many colors', 'sizes': ['S'], 'gender': 'men',
+        'timestamp': '2025-05-03T00:00:00'
+    }]
+    df = transform_data(raw)
+    assert df.empty  # karena colors == 0 akan di-drop
+
+
+def test_transform_gender_not_string():
+    raw = [{
+        'title': 'Product F', 'price_usd': 20.0, 'rating': 4.0,
+        'colors': ['red'], 'sizes': ['S'], 'gender': None,
+        'timestamp': '2025-05-03T00:00:00'
+    }]
+    df = transform_data(raw)
+    # Gender jadi empty string dan tidak masuk filter → hasilnya kosong
+    assert df.empty
+
+def test_transform_sizes_invalid_type():
+    raw = [{
+        'title': 'Product G', 'price_usd': 20.0, 'rating': 4.0,
+        'colors': ['red'], 'sizes': 12345, 'gender': 'men',
+        'timestamp': '2025-05-03T00:00:00'
+    }]
+    df = transform_data(raw)
+    assert df.empty  # karena sizes jadi empty string → difilter
+
+def test_transform_timestamp_invalid():
+    raw = [{
+        'title': 'Product H', 'price_usd': 20.0, 'rating': 4.0,
+        'colors': ['red'], 'sizes': ['M'], 'gender': 'men',
+        'timestamp': 'invalid-date'
+    }]
+    df = transform_data(raw)
+    assert pd.isna(df.iloc[0]['timestamp'])
+
+def test_unexpected_exception_handled(sample_raw_data, caplog):
+    caplog.set_level(logging.ERROR)
+
+    # Patch internal type casting ke float agar lempar error tak terduga
+    with mock.patch("utils.transform.float", side_effect=Exception("unexpected float error")):
+        df = transform_data(sample_raw_data)
+
+    assert isinstance(df, pd.DataFrame)
+    assert "Unexpected error transforming product" in caplog.text
+

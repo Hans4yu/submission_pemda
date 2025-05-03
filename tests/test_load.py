@@ -3,7 +3,7 @@ import pandas as pd
 import os
 import logging
 from unittest import mock
-from utils.load import save_to_csv
+from utils.load import save_to_csv, save_to_gsheet_api, save_to_postgresql
 
 @pytest.fixture
 def sample_df():
@@ -78,3 +78,67 @@ def test_save_csv_invalid_path(sample_df, caplog):
     assert result is False
     assert "OSError while saving: [Errno 22] Invalid argument" in caplog.text
 
+# -------------------------------
+# save_to_gsheet_api tests
+# -------------------------------
+
+def test_save_to_gsheet_api_success(sample_df, caplog):
+    with mock.patch("utils.load.Credentials.from_service_account_file") as mock_creds, \
+         mock.patch("utils.load.build") as mock_build:
+        
+        mock_service = mock.Mock()
+        mock_sheet = mock.Mock()
+        mock_sheet.values().update().execute.return_value = {}
+        mock_service.spreadsheets.return_value = mock_sheet
+        mock_build.return_value = mock_service
+
+        caplog.set_level(logging.INFO)
+
+        result = save_to_gsheet_api(sample_df, "spreadsheet_id", "Sheet1!A1", "dummy_key.json")
+
+        assert result is True
+        assert "Data successfully uploaded to Google Sheets" in caplog.text
+
+def test_save_to_gsheet_api_empty(caplog):
+    empty_df = pd.DataFrame()
+    result = save_to_gsheet_api(empty_df, "spreadsheet_id", "Sheet1!A1", "dummy_key.json")
+    assert result is False
+    assert "No data to upload to Google Sheets" in caplog.text
+
+def test_save_to_gsheet_api_failure(sample_df, caplog):
+    with mock.patch("utils.load.Credentials.from_service_account_file", side_effect=Exception("API error")):
+        result = save_to_gsheet_api(sample_df, "spreadsheet_id", "Sheet1!A1", "dummy_key.json")
+    assert result is False
+    assert "Failed to upload to Google Sheets: API error" in caplog.text
+
+# -------------------------------
+# save_to_postgresql tests
+# -------------------------------
+
+def test_save_to_postgresql_success(sample_df, caplog):
+    caplog.set_level(logging.INFO)
+
+    with mock.patch("utils.load.create_engine") as mock_engine:
+        mock_conn = mock.Mock()
+        mock_engine.return_value = mock_conn
+        with mock.patch.object(sample_df, "to_sql") as mock_to_sql:
+            result = save_to_postgresql(sample_df, "postgresql://test", "test_table")
+
+    assert result is True
+    assert "Data successfully saved to PostgreSQL table test_table" in caplog.text
+
+
+def test_save_to_postgresql_empty(caplog):
+    empty_df = pd.DataFrame()
+    result = save_to_postgresql(empty_df, "postgresql://test", "test_table")
+    assert result is False
+    assert "No data to save to PostgreSQL" in caplog.text
+
+def test_save_to_postgresql_sqlalchemy_error(sample_df, caplog):
+    with mock.patch("utils.load.create_engine") as mock_engine:
+        mock_conn = mock.Mock()
+        mock_engine.return_value = mock_conn
+        with mock.patch.object(sample_df, "to_sql", side_effect=Exception("SQL error")):
+            result = save_to_postgresql(sample_df, "postgresql://test", "test_table")
+    assert result is False
+    assert "Unexpected error while saving to PostgreSQL: SQL error" in caplog.text
